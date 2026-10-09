@@ -627,6 +627,10 @@ other non-default provider fields are not supported"
             name: "Anthropic".into(),
             base_url: Some(ANTHROPIC_DEFAULT_BASE_URL.into()),
             wire_api: WireApi::Anthropic,
+            // The desktop app derives its login state (and the voice button) from
+            // account/read, which reports "no auth" when this is false. Claude requests
+            // use their own OAuth token; the ChatGPT login is still needed for realtime.
+            requires_openai_auth: true,
             ..Default::default()
         }
     }
