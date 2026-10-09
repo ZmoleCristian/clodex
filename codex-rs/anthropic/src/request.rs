@@ -279,6 +279,9 @@ fn messages_json(items: &[ResponseItem]) -> Vec<Value> {
                         "assistant",
                         json!({"type": "redacted_thinking", "data": data}),
                     );
+                } else if signature.contains(':') {
+                    // Foreign scheme (e.g. an opencodex-wrapped "ocxr1:…"); Anthropic rejects it.
+                    continue;
                 } else {
                     let mut text: Vec<&str> = summary
                         .iter()
