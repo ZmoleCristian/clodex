@@ -743,32 +743,6 @@ impl RealtimeConversationManager {
             .await?;
             (task, None)
         } else {
-            // TEMP clodex debug
-            {
-                let hs = extra_headers.clone().unwrap_or_default();
-                let mut lines = vec![format!(
-                    "standalone ws: parser={event_parser:?} base_url={} model={:?}",
-                    client.base_url_for_debug(),
-                    session_config.model
-                )];
-                for (name, value) in hs.iter() {
-                    let v = value.to_str().unwrap_or("<bin>");
-                    let shown = if name.as_str().eq_ignore_ascii_case("authorization") {
-                        format!("{}…({} chars)", &v[..v.len().min(14)], v.len())
-                    } else {
-                        v.chars().take(60).collect::<String>()
-                    };
-                    lines.push(format!("  {name}: {shown}"));
-                }
-                let _ = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/clodex-voice.log")
-                    .and_then(|mut f| {
-                        use std::io::Write;
-                        writeln!(f, "{}", lines.join("\n"))
-                    });
-            }
             let connection = client
                 .connect(
                     session_config,
@@ -776,17 +750,7 @@ impl RealtimeConversationManager {
                     default_headers(),
                 )
                 .await
-                .map_err(|err| {
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/tmp/clodex-voice.log")
-                        .and_then(|mut f| {
-                            use std::io::Write;
-                            writeln!(f, "  ERROR: {err:?}")
-                        });
-                    map_api_error(err)
-                })?;
+                .map_err(map_api_error)?;
             let task = spawn_realtime_input_task(
                 RealtimeInputTask {
                     writer: connection.writer(),
