@@ -1421,12 +1421,22 @@ async fn prepare_realtime_start(
     let mut extra_headers = match transport {
         ConversationStartTransport::Websocket => {
             let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
-            realtime_request_headers(
+            let mut headers = realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
                 Some(realtime_api_key.as_str()),
                 event_parser,
                 originator.as_str(),
             )?
+            .unwrap_or_default();
+            // A ChatGPT bearer is only valid together with its account id.
+            if let Some(auth) = auth.as_ref()
+                && auth.is_chatgpt_auth()
+                && let Some(account_id) = auth.get_account_id()
+                && let Ok(value) = HeaderValue::from_str(&account_id)
+            {
+                headers.insert("chatgpt-account-id", value);
+            }
+            Some(headers)
         }
         ConversationStartTransport::Webrtc { .. }
         | ConversationStartTransport::ExistingCall { .. } => {
@@ -1903,6 +1913,15 @@ fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> C
 
     if let Some(api_key) = auth.and_then(CodexAuth::api_key) {
         return Ok(api_key.to_string());
+    }
+
+    // Clodex: a ChatGPT login is accepted by the realtime endpoint as a bearer; prefer it over
+    // an unrelated API key lying around in the environment.
+    if let Some(auth) = auth
+        && auth.is_chatgpt_auth()
+        && let Ok(token) = auth.get_token()
+    {
+        return Ok(token);
     }
 
     // TODO(aibrahim): Remove this temporary fallback once realtime auth no longer
