@@ -341,8 +341,15 @@ fn messages_json(items: &[ResponseItem]) -> Vec<Value> {
             } => {
                 messages.push("user", tool_result(call_id, output));
             }
+            // Codex delivers tool-less inputs (new-thread prompts from create_thread,
+            // delegation payloads) as a FunctionCallOutput with no call_id. Anthropic has no
+            // tool_result to attach it to, so it becomes plain user text.
+            ResponseItem::FunctionCallOutput { call_id: None, output, .. } => {
+                for block in output_blocks(output) {
+                    messages.push("user", block);
+                }
+            }
             ResponseItem::Reasoning { .. }
-            | ResponseItem::FunctionCallOutput { call_id: None, .. }
             | ResponseItem::AdditionalTools { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -395,31 +402,33 @@ fn image_block(image: &ImageReference) -> Option<Value> {
 }
 
 fn tool_result(call_id: &str, output: &FunctionCallOutputPayload) -> Value {
-    let content = match &output.body {
-        FunctionCallOutputBody::Text(text) if text.is_empty() => json!("(empty tool output)"),
-        FunctionCallOutputBody::Text(text) => json!(text),
-        FunctionCallOutputBody::ContentItems(items) => {
-            let blocks: Vec<Value> = items
-                .iter()
-                .filter_map(|item| match item {
-                    FunctionCallOutputContentItem::InputText { text } => text_block(text),
-                    FunctionCallOutputContentItem::InputImage { image, .. } => image_block(image),
-                    FunctionCallOutputContentItem::InputAudio { .. }
-                    | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
-                })
-                .collect();
-            if blocks.is_empty() {
-                json!("(empty tool output)")
-            } else {
-                Value::Array(blocks)
-            }
-        }
+    let blocks = output_blocks(output);
+    let content = if blocks.is_empty() {
+        json!("(empty tool output)")
+    } else {
+        Value::Array(blocks)
     };
     let mut block = json!({"type": "tool_result", "tool_use_id": call_id, "content": content});
     if output.success == Some(false) {
         block["is_error"] = json!(true);
     }
     block
+}
+
+/// Content blocks for a tool output payload; empty when there is nothing renderable.
+fn output_blocks(output: &FunctionCallOutputPayload) -> Vec<Value> {
+    match &output.body {
+        FunctionCallOutputBody::Text(text) => text_block(text).into_iter().collect(),
+        FunctionCallOutputBody::ContentItems(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                FunctionCallOutputContentItem::InputText { text } => text_block(text),
+                FunctionCallOutputContentItem::InputImage { image, .. } => image_block(image),
+                FunctionCallOutputContentItem::InputAudio { .. }
+                | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
+            })
+            .collect(),
+    }
 }
 
 /// Every \`tool_use\` must be answered by a \`tool_result\` at the head of the next user message,
