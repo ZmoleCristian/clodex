@@ -743,6 +743,32 @@ impl RealtimeConversationManager {
             .await?;
             (task, None)
         } else {
+            // TEMP clodex debug
+            {
+                let hs = extra_headers.clone().unwrap_or_default();
+                let mut lines = vec![format!(
+                    "standalone ws: parser={event_parser:?} base_url={} model={:?}",
+                    client.base_url_for_debug(),
+                    session_config.model
+                )];
+                for (name, value) in hs.iter() {
+                    let v = value.to_str().unwrap_or("<bin>");
+                    let shown = if name.as_str().eq_ignore_ascii_case("authorization") {
+                        format!("{}…({} chars)", &v[..v.len().min(14)], v.len())
+                    } else {
+                        v.chars().take(60).collect::<String>()
+                    };
+                    lines.push(format!("  {name}: {shown}"));
+                }
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/clodex-voice.log")
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        writeln!(f, "{}", lines.join("\n"))
+                    });
+            }
             let connection = client
                 .connect(
                     session_config,
@@ -750,7 +776,17 @@ impl RealtimeConversationManager {
                     default_headers(),
                 )
                 .await
-                .map_err(map_api_error)?;
+                .map_err(|err| {
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/tmp/clodex-voice.log")
+                        .and_then(|mut f| {
+                            use std::io::Write;
+                            writeln!(f, "  ERROR: {err:?}")
+                        });
+                    map_api_error(err)
+                })?;
             let task = spawn_realtime_input_task(
                 RealtimeInputTask {
                     writer: connection.writer(),
@@ -1367,9 +1403,10 @@ async fn prepare_realtime_start(
             api_provider.base_url = realtime_call_base_url.clone();
             Some(api_provider)
         } else if voice_on_openai {
-            // The WebRTC call is created through the model client, whose provider is Anthropic;
-            // hand it the OpenAI provider explicitly.
-            Some(provider.to_api_provider(Some(AuthMode::ApiKey))?)
+            // The WebRTC call is created through the model client, whose provider is Anthropic.
+            // Hand it the OpenAI provider resolved for the real auth mode: a ChatGPT login
+            // creates calls on chatgpt.com/backend-api/codex (api.openai.com answers 403).
+            Some(provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?)
         } else {
             None
         };
