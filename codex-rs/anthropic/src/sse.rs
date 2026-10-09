@@ -7,9 +7,11 @@ use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::ResponseStream;
 use codex_http_client::StreamResponse;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -150,6 +152,10 @@ enum Block {
         freeform: bool,
         json: String,
     },
+    WebSearch {
+        id: String,
+        json: String,
+    },
 }
 
 struct State {
@@ -158,6 +164,9 @@ struct State {
     usage: Usage,
     stop_reason: Option<String>,
     block: Block,
+    /// Finished text waiting to see whether the next block continues it. Anthropic splits a
+    /// cited answer into one `text` block per citation span; Codex wants one message.
+    pending_text: Option<String>,
 }
 
 impl State {
@@ -168,6 +177,7 @@ impl State {
             usage: Usage::default(),
             stop_reason: None,
             block: Block::None,
+            pending_text: None,
         }
     }
 
@@ -214,6 +224,7 @@ impl State {
                 }
             }
             "message_stop" => {
+                self.flush_text(out);
                 out.push(self.completed());
                 return true;
             }
@@ -233,10 +244,19 @@ impl State {
     }
 
     fn start_block(&mut self, block: &Value, out: &mut Vec<Result<ResponseEvent, ApiError>>) {
-        match block["type"].as_str().unwrap_or_default() {
+        let kind = block["type"].as_str().unwrap_or_default();
+        if kind != "text" {
+            self.flush_text(out);
+        }
+        match kind {
             "text" => {
-                self.block = Block::Text(String::new());
-                out.push(Ok(ResponseEvent::OutputItemAdded(message_item(String::new()))));
+                self.block = match self.pending_text.take() {
+                    Some(text) => Block::Text(text),
+                    None => {
+                        out.push(Ok(ResponseEvent::OutputItemAdded(message_item(String::new()))));
+                        Block::Text(String::new())
+                    }
+                };
             }
             "thinking" => {
                 self.block = Block::Thinking {
@@ -280,6 +300,20 @@ impl State {
                     json: String::new(),
                 };
             }
+            "server_tool_use" if block["name"] == "web_search" => {
+                let id = block["id"].as_str().unwrap_or_default().to_string();
+                out.push(Ok(ResponseEvent::OutputItemAdded(web_search_item(
+                    id.clone(),
+                    "in_progress",
+                    None,
+                ))));
+                self.block = Block::WebSearch {
+                    id,
+                    json: String::new(),
+                };
+            }
+            // Results are consumed server-side; the cited answer streams as ordinary text.
+            "web_search_tool_result" => {}
             other => debug!("ignoring anthropic content block type {other}"),
         }
     }
@@ -311,6 +345,9 @@ impl State {
                     delta: piece.to_string(),
                 }));
             }
+            ("input_json_delta", Block::WebSearch { json, .. }) => {
+                json.push_str(delta["partial_json"].as_str().unwrap_or_default());
+            }
             _ => {}
         }
     }
@@ -319,7 +356,7 @@ impl State {
         match block {
             Block::None => {}
             Block::Text(text) => {
-                out.push(Ok(ResponseEvent::OutputItemDone(message_item(text))));
+                self.pending_text = Some(text);
             }
             Block::Thinking { text, signature } => {
                 out.push(Ok(ResponseEvent::OutputItemDone(reasoning_item(
@@ -371,6 +408,22 @@ impl State {
                 };
                 out.push(Ok(ResponseEvent::OutputItemDone(item)));
             }
+            Block::WebSearch { id, json } => {
+                let query = serde_json::from_str::<Value>(&json)
+                    .ok()
+                    .and_then(|v| v["query"].as_str().map(str::to_string));
+                out.push(Ok(ResponseEvent::OutputItemDone(web_search_item(
+                    id,
+                    "completed",
+                    query,
+                ))));
+            }
+        }
+    }
+
+    fn flush_text(&mut self, out: &mut Vec<Result<ResponseEvent, ApiError>>) {
+        if let Some(text) = self.pending_text.take() {
+            out.push(Ok(ResponseEvent::OutputItemDone(message_item(text))));
         }
     }
 
@@ -417,6 +470,18 @@ fn reasoning_item(text: String, signature: Option<String>) -> ResponseItem {
         },
         content: None,
         encrypted_content: signature,
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn web_search_item(id: String, status: &str, query: Option<String>) -> ResponseItem {
+    ResponseItem::WebSearchCall {
+        id: Some(ResponseItemId::from_server(id)),
+        status: Some(status.to_string()),
+        action: query.map(|query| WebSearchAction::Search {
+            query: Some(query),
+            queries: None,
+        }),
         internal_chat_message_metadata_passthrough: None,
     }
 }

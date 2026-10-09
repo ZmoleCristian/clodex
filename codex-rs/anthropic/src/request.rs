@@ -11,6 +11,7 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_tools::FreeformTool;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -31,6 +32,7 @@ const OUTPUT_FLOOR: u64 = 4096;
 const MIN_THINKING_BUDGET: u64 = 1024;
 const BUDGET_THINKING_CEILING: u64 = 32_000;
 const ADAPTIVE_THINKING_CEILING: u64 = 40_192;
+const WEB_SEARCH_MAX_USES: u32 = 5;
 
 pub struct RequestInput<'a> {
     pub model: &'a str,
@@ -132,7 +134,12 @@ fn tools_json(tools: &[ToolSpec], names: &mut ToolNameMap) -> Vec<Value> {
                     }
                 }
             }
-            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {}
+            ToolSpec::WebSearch { .. } => out.push(json!({
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": WEB_SEARCH_MAX_USES,
+            })),
+            ToolSpec::ToolSearch { .. } => {}
         }
     }
     out
@@ -349,13 +356,24 @@ fn messages_json(items: &[ResponseItem]) -> Vec<Value> {
                     messages.push("user", block);
                 }
             }
+            // Anthropic server tool calls cannot be replayed; keep the history coherent with a
+            // text marker so the model still sees that it searched.
+            ResponseItem::WebSearchCall { action, .. } => {
+                let query = match action {
+                    Some(WebSearchAction::Search { query: Some(query), .. }) => query.clone(),
+                    Some(WebSearchAction::Search { queries: Some(queries), .. }) => queries.join(", "),
+                    Some(WebSearchAction::OpenPage { url: Some(url) })
+                    | Some(WebSearchAction::FindInPage { url: Some(url), .. }) => url.clone(),
+                    _ => String::new(),
+                };
+                messages.push("assistant", json!({"type": "text", "text": format!("[web search: {query}]")}));
+            }
             ResponseItem::Reasoning { .. }
             | ResponseItem::AdditionalTools { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::ToolSearchCall { .. }
             | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::ConfigurationUpdate { .. }
