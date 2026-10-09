@@ -1,81 +1,74 @@
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+# Clodex
 
----
+Codex CLI with Claude stuffed inside. An abomination. Sam and Dario would not hold hands, so we did it for them. 🦞🤝🦞
 
-## Quickstart
+Clodex is a fork of [openai/codex](https://github.com/openai/codex) where the model behind the ChatGPT desktop app's Codex is Claude, talking to Anthropic's Messages API in-process. No proxy, no translation layer, no TypeScript. The desktop app, the voice mode and your ChatGPT login stay exactly as they are; only the backend binary changes.
 
-### Installing and running Codex CLI
+Built in one day, in one sitting, by voice. Treat it accordingly.
 
-Run the following on Mac or Linux to install Codex CLI:
+## What it does
 
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+- `WireApi::Anthropic`: a new wire in `codex-rs/anthropic` that maps Codex's Responses-style prompt to Anthropic Messages (tools, thinking with signatures, prompt caching, images, native web search) and streams the result back as Codex events.
+- Auth from Claude Code: reads `~/.claude/.credentials.json`, refreshes the OAuth token in place, retries once on 401. Your Claude subscription is the quota.
+- Voice mode keeps working: the realtime call is created on your ChatGPT account, the backend that answers is Claude. A voice-mode addendum is appended to every realtime session so Claude knows how to behave as a voice backend.
+- Subagents wake the parent when they finish.
+- Threads created under another provider resume on the active one.
+
+Twelve commits on top of `rust-v0.162.0-alpha.10`. `git log b496f984f4..HEAD` is the whole story.
+
+## Heads up
+
+- Tested on one machine: Arch Linux, ChatGPT desktop 26.930 (`chatgpt-bin`), Codex CLI 0.162.0-alpha.10 bundled. Nothing else.
+- Needs an existing ChatGPT login in the desktop app (for the UI and voice) and an existing Claude Code login (for the model).
+- Anthropic's OAuth is meant for Claude Code. Clodex presents itself as Claude Code. Whether that is inside the terms of your plan is your call.
+- Unoptimized dev build, ~420 MB binary. No tests were run. No clippy. Expect rough edges: citations are dropped, `apply_patch` does not stream its diff, rate-limit headers are ignored.
+- The desktop still runs the stock `codex-code-mode-host`; Clodex symlinks to it.
+
+## Install
+
+```bash
+git clone https://github.com/ZmoleCristian/clodex
+cd clodex/codex-rs
+RUSTFLAGS="-C link-arg=-fuse-ld=mold" cargo build -p codex-cli --bin codex --profile dev-small
+ln -s /usr/lib/chatgpt/resources/codex-code-mode-host target/dev-small/codex-code-mode-host
 ```
 
-Run the following on Windows to install Codex CLI:
+Cold build is about 5 minutes on 8 cores; incremental builds are 30 to 50 seconds.
 
-```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+A model catalog with the Claude models is needed. Put it at `~/.codex/catalog.clodex.json` (see `docs/clodex-catalog.example.json`).
+
+Wrapper the desktop will launch instead of its bundled CLI:
+
+```sh
+#!/bin/sh
+# ~/bin/clodex-codex
+real=/path/to/clodex/codex-rs/target/dev-small/codex
+case " $* " in
+  *" app-server "*) exec "$real" "$@" \
+    -c model_provider=anthropic \
+    -c model=claude-opus-5-5 \
+    -c model_catalog_json=$HOME/.codex/catalog.clodex.json ;;
+  *) exec "$real" "$@" ;;
+esac
 ```
 
-The standalone installers download from `https://releases.openai.com/codex` by default and fall back to GitHub Releases if a metadata or asset download is unavailable. To force GitHub Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `false` (`0` and `no` are also accepted):
+Launcher:
 
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh
+```sh
+#!/bin/sh
+# ~/bin/clodex
+pkill -f /usr/lib/chatgpt/ChatGPT 2>/dev/null
+while pgrep -f /usr/lib/chatgpt/ChatGPT >/dev/null; do sleep 0.2; done
+export CODEX_CLI_PATH=$HOME/bin/clodex-codex
+exec /usr/lib/chatgpt/ChatGPT "$@"
 ```
 
-```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex
-```
+The stock app, `/usr/lib/chatgpt` and `~/.codex` are untouched. Start the app from its menu entry and you get stock Codex; start it with `clodex` and you get Claude.
 
-Codex CLI can also be installed via the following package managers:
+## Why
 
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
+OpenCodex worked but it is a 480k-line TypeScript proxy between the app and the model. The seam in Codex is one match arm in `core/src/client.rs`; it was cheaper to put Anthropic there.
 
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
+## Upstream
 
-Then simply run `codex` to get started.
-
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
-
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
-
-</details>
-
-### Using Codex with your ChatGPT plan
-
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
-
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
-
-## Docs
-
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
-
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+This fork tracks `openai/codex` tags. Rebase, resolve the handful of conflicts in `client.rs`, `realtime_conversation.rs` and `thread_processor.rs`, rebuild. The upstream README is in `docs/README.upstream.md`.
