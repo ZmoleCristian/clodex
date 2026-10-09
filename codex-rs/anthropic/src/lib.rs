@@ -28,6 +28,8 @@ pub const CLAUDE_CODE_SYSTEM_INSTRUCTION: &str =
 /// OAuth tokens reject arbitrary tool names; every Codex tool is prefixed on the wire.
 pub const TOOL_PREFIX: &str = "custom_";
 const SDK_VERSION: &str = "0.74.0";
+/// Anthropic gates models by Claude Code version (`claude_code_version_too_old` below 2.1.280).
+const USER_AGENT: &str = "claude-cli/2.1.300 (external, cli)";
 
 /// Headers for an OAuth-authenticated streaming Messages request, including the Claude Code
 /// client fingerprint the token was minted for.
@@ -43,7 +45,7 @@ pub fn oauth_headers(access_token: &str) -> HeaderMap {
     put("anthropic-version", API_VERSION.into());
     put("anthropic-beta", OAUTH_BETA.into());
     put("authorization", format!("Bearer {access_token}"));
-    put("user-agent", format!("@anthropic-ai/sdk/{SDK_VERSION}"));
+    put("user-agent", USER_AGENT.into());
     put("x-app", "cli".into());
     put("x-stainless-retry-count", "0".into());
     put("x-stainless-runtime", "node".into());
@@ -79,13 +81,12 @@ fn stainless_os() -> &'static str {
 fn claude_code_session_id(access_token: &str) -> String {
     let digest = Sha256::digest(format!("claude-code-session:{access_token}").as_bytes());
     let h: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    let variant = ((u8::from_str_radix(&h[16..17], 16).unwrap_or(0) & 0x3) | 0x8).to_string();
+    let variant = (u8::from_str_radix(&h[16..17], 16).unwrap_or(0) & 0x3) | 0x8;
     format!(
-        "{}-{}-4{}-{}{}-{}",
+        "{}-{}-4{}-{variant:x}{}-{}",
         &h[0..8],
         &h[8..12],
         &h[13..16],
-        variant,
         &h[17..20],
         &h[20..32]
     )

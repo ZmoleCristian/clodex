@@ -2327,8 +2327,6 @@ impl ModelClientSession {
             codex_anthropic::MESSAGES_PATH,
             client_setup.redirect_policy,
         )?;
-        let access_token = codex_anthropic::oauth_access_token()
-            .map_err(|err| CodexErr::Fatal(format!("anthropic oauth token: {err}")))?;
         let input = prompt.get_formatted_input_for_request(model_info);
         let request = codex_anthropic::build_request(codex_anthropic::RequestInput {
             model: &model_info.slug,
@@ -2339,27 +2337,41 @@ impl ModelClientSession {
             parallel_tool_calls: prompt.parallel_tool_calls,
             output_schema: prompt.output_schema.as_ref(),
         });
-        let inference_trace_attempt = inference_trace.start_attempt();
-        inference_trace_attempt.record_started(&request.body);
+        // A 401 means the cached token died early (revoked, or rotated by Claude Code);
+        // refresh once and retry.
+        let mut rejected: Option<String> = None;
+        let (response, inference_trace_attempt) = loop {
+            let access_token =
+                codex_anthropic::oauth_access_token(&transport, rejected.as_deref())
+                    .await
+                    .map_err(|err| CodexErr::Fatal(format!("anthropic oauth token: {err}")))?;
+            let inference_trace_attempt = inference_trace.start_attempt();
+            inference_trace_attempt.record_started(&request.body);
 
-        let mut http_request = codex_http_client::Request::new(
-            http::Method::POST,
-            client_setup
-                .api_provider
-                .url_for_path(codex_anthropic::MESSAGES_PATH),
-        )
-        .with_json(&request.body);
-        http_request.headers = codex_anthropic::oauth_headers(&access_token);
-        let response = match transport.stream(http_request).await {
-            Ok(response) => response,
-            Err(err) => {
-                let err = self
-                    .client
-                    .state
-                    .provider
-                    .map_api_error(ApiError::Transport(err));
-                inference_trace_attempt.record_failed(&err, /*upstream_request_id*/ None, &[]);
-                return Err(err);
+            let mut http_request = codex_http_client::Request::new(
+                http::Method::POST,
+                client_setup
+                    .api_provider
+                    .url_for_path(codex_anthropic::MESSAGES_PATH),
+            )
+            .with_json(&request.body);
+            http_request.headers = codex_anthropic::oauth_headers(&access_token);
+            match transport.stream(http_request).await {
+                Ok(response) => break (response, inference_trace_attempt),
+                Err(TransportError::Http { status, .. })
+                    if status == StatusCode::UNAUTHORIZED && rejected.is_none() =>
+                {
+                    rejected = Some(access_token);
+                }
+                Err(err) => {
+                    let err = self
+                        .client
+                        .state
+                        .provider
+                        .map_api_error(ApiError::Transport(err));
+                    inference_trace_attempt.record_failed(&err, /*upstream_request_id*/ None, &[]);
+                    return Err(err);
+                }
             }
         };
         let api_stream = codex_anthropic::spawn_response_stream(
