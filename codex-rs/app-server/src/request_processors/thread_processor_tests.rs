@@ -768,6 +768,7 @@ mod thread_processor_behavior_tests {
             &mut request_overrides,
             &mut typesafe_overrides,
             &persisted_metadata,
+            "openai",
         );
 
         assert_eq!(
@@ -805,6 +806,7 @@ mod thread_processor_behavior_tests {
             &mut request_overrides,
             &mut typesafe_overrides,
             &persisted_metadata,
+            "openai",
         );
 
         assert_eq!(typesafe_overrides.model, Some("gpt-5.2-codex".to_string()));
@@ -834,6 +836,7 @@ mod thread_processor_behavior_tests {
             &mut request_overrides,
             &mut typesafe_overrides,
             &persisted_metadata,
+            "openai",
         );
 
         assert_eq!(typesafe_overrides.model, None);
@@ -863,6 +866,7 @@ mod thread_processor_behavior_tests {
             &mut request_overrides,
             &mut typesafe_overrides,
             &persisted_metadata,
+            "openai",
         );
 
         assert_eq!(typesafe_overrides.model, None);
@@ -886,6 +890,7 @@ mod thread_processor_behavior_tests {
             &mut request_overrides,
             &mut typesafe_overrides,
             &persisted_metadata,
+            "openai",
         );
 
         assert_eq!(typesafe_overrides.model, None);
@@ -911,6 +916,7 @@ mod thread_processor_behavior_tests {
             &mut request_overrides,
             &mut typesafe_overrides,
             &persisted_metadata,
+            "openai",
         );
 
         assert_eq!(typesafe_overrides.model, None);

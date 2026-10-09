@@ -231,8 +231,13 @@ fn merge_persisted_resume_metadata(
     request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: &mut ConfigOverrides,
     persisted_metadata: &ThreadMetadata,
+    active_provider_id: &str,
 ) {
     if has_model_resume_override(request_overrides.as_ref(), typesafe_overrides) {
+        return;
+    }
+    // The launcher owns the provider; a thread born under another provider follows the current one.
+    if persisted_metadata.model_provider != active_provider_id {
         return;
     }
 
@@ -4273,7 +4278,12 @@ impl ThreadRequestProcessor {
             .await
             .ok()
             .flatten()?;
-        merge_persisted_resume_metadata(request_overrides, typesafe_overrides, &persisted_metadata);
+        merge_persisted_resume_metadata(
+            request_overrides,
+            typesafe_overrides,
+            &persisted_metadata,
+            self.config.model_provider_id.as_str(),
+        );
         Some(persisted_metadata)
     }
 

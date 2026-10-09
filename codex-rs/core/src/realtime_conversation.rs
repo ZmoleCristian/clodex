@@ -37,6 +37,7 @@ use codex_login::default_client::add_originator_header;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -1318,7 +1319,13 @@ async fn prepare_realtime_start(
     sess: &Arc<Session>,
     params: ConversationStartParams,
 ) -> CodexResult<PreparedRealtimeConversationStart> {
-    let provider = sess.provider().await;
+    // Realtime voice is an OpenAI API; Anthropic-wired chat providers hand voice to OpenAI.
+    let provider = match sess.provider().await {
+        provider if provider.wire_api == WireApi::Anthropic => {
+            ModelProviderInfo::create_openai_provider(None)
+        }
+        provider => provider,
+    };
     let auth_manager = sess
         .services
         .model_client
