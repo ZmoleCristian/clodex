@@ -28,9 +28,17 @@ impl RealtimeState {
         start_instructions: Option<&str>,
         end_instructions: Option<&str>,
     ) -> Self {
+        // Clodex: whatever the desktop sends as start instructions (or the upstream
+        // default), the voice addendum always follows it.
+        let base = start_instructions.unwrap_or(codex_prompts::START_INSTRUCTIONS);
+        let start_instructions = format!(
+            "{}\n\n{}",
+            base.trim(),
+            codex_prompts::CLODEX_VOICE_ADDENDUM.trim()
+        );
         Self {
             snapshot: RealtimeSnapshot { active },
-            start_instructions: start_instructions.map(str::to_string),
+            start_instructions: Some(start_instructions),
             end_instructions: end_instructions.map(str::to_string),
         }
     }
