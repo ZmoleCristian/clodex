@@ -112,7 +112,9 @@ impl LocalAgentControl {
             parent_agent_path,
             Vec::new(),
             message,
-            /*trigger_turn*/ false,
+            // Clodex: a finished child wakes an idle parent so the result is reported
+            // right away instead of waiting in the mailbox for the next user turn.
+            /*trigger_turn*/ true,
         );
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, outcome.thread_id);
