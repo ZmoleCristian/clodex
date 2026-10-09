@@ -2239,6 +2239,16 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
+            WireApi::Anthropic => {
+                self.stream_anthropic(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    inference_trace,
+                )
+                .await
+            }
             WireApi::Responses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
@@ -2295,6 +2305,76 @@ impl ModelClientSession {
             .force_http_fallback(session_telemetry, model_info);
         self.websocket_session = WebsocketSession::default();
         activated
+    }
+
+    /// Streams a turn via the Anthropic Messages API, translated in-process by `codex-anthropic`.
+    async fn stream_anthropic(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        inference_trace: &InferenceTraceContext,
+    ) -> Result<ResponseStream> {
+        use codex_http_client::HttpTransport;
+
+        let client_setup = self
+            .client
+            .current_client_setup(ClientRouting::ConfiguredProvider)
+            .await?;
+        let transport = self.client.build_api_transport(
+            &client_setup.api_provider,
+            codex_anthropic::MESSAGES_PATH,
+            client_setup.redirect_policy,
+        )?;
+        let access_token = codex_anthropic::oauth_access_token()
+            .map_err(|err| CodexErr::Fatal(format!("anthropic oauth token: {err}")))?;
+        let input = prompt.get_formatted_input_for_request(model_info);
+        let request = codex_anthropic::build_request(codex_anthropic::RequestInput {
+            model: &model_info.slug,
+            instructions: &prompt.base_instructions.text,
+            input: &input,
+            tools: &prompt.tools,
+            effort,
+            parallel_tool_calls: prompt.parallel_tool_calls,
+            output_schema: prompt.output_schema.as_ref(),
+        });
+        let inference_trace_attempt = inference_trace.start_attempt();
+        inference_trace_attempt.record_started(&request.body);
+
+        let mut http_request = codex_http_client::Request::new(
+            http::Method::POST,
+            client_setup
+                .api_provider
+                .url_for_path(codex_anthropic::MESSAGES_PATH),
+        )
+        .with_json(&request.body);
+        http_request.headers = codex_anthropic::oauth_headers(&access_token);
+        let response = match transport.stream(http_request).await {
+            Ok(response) => response,
+            Err(err) => {
+                let err = self
+                    .client
+                    .state
+                    .provider
+                    .map_api_error(ApiError::Transport(err));
+                inference_trace_attempt.record_failed(&err, /*upstream_request_id*/ None, &[]);
+                return Err(err);
+            }
+        };
+        let api_stream = codex_anthropic::spawn_response_stream(
+            response,
+            client_setup.api_provider.stream_idle_timeout,
+            request.tool_names,
+        );
+        let (stream, _) = map_response_stream(
+            api_stream,
+            session_telemetry.clone(),
+            inference_trace_attempt,
+            Arc::clone(&self.client.state.provider),
+            /*interceptors*/ Vec::new(),
+        );
+        Ok(stream)
     }
 }
 
