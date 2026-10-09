@@ -1320,11 +1320,12 @@ async fn prepare_realtime_start(
     params: ConversationStartParams,
 ) -> CodexResult<PreparedRealtimeConversationStart> {
     // Realtime voice is an OpenAI API; Anthropic-wired chat providers hand voice to OpenAI.
-    let provider = match sess.provider().await {
-        provider if provider.wire_api == WireApi::Anthropic => {
-            ModelProviderInfo::create_openai_provider(None)
-        }
-        provider => provider,
+    let chat_provider = sess.provider().await;
+    let voice_on_openai = chat_provider.wire_api == WireApi::Anthropic;
+    let provider = if voice_on_openai {
+        ModelProviderInfo::create_openai_provider(None)
+    } else {
+        chat_provider
     };
     let auth_manager = sess
         .services
@@ -1365,6 +1366,10 @@ async fn prepare_realtime_start(
             let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
             api_provider.base_url = realtime_call_base_url.clone();
             Some(api_provider)
+        } else if voice_on_openai {
+            // The WebRTC call is created through the model client, whose provider is Anthropic;
+            // hand it the OpenAI provider explicitly.
+            Some(provider.to_api_provider(Some(AuthMode::ApiKey))?)
         } else {
             None
         };
