@@ -4838,6 +4838,13 @@ impl Session {
         }
     }
 
+    pub(crate) async fn token_info_and_rate_limits(
+        &self,
+    ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
+        let state = self.state.lock().await;
+        state.token_info_and_rate_limits()
+    }
+
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {
         let state = self.state.lock().await;
         state.mcp_dependency_prompted()

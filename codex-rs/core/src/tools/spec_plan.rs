@@ -10,6 +10,7 @@ use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::CurrentTimeHandler;
+use crate::tools::handlers::ClodexUsageHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
@@ -1206,6 +1207,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
         registry.add(GetContextRemainingHandler);
     }
+    registry.add(ClodexUsageHandler);
 
     let current_time_reminder_enabled = features.enabled(Feature::CurrentTimeReminder);
     let model_has_clock = context

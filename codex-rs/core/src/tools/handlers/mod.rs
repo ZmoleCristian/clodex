@@ -1,5 +1,6 @@
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
+mod clodex_usage;
 mod current_time;
 mod dynamic;
 pub(crate) mod extension_tools;
@@ -55,6 +56,7 @@ use crate::session::turn_context::TurnEnvironment;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
+pub use clodex_usage::ClodexUsageHandler;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use current_time::CurrentTimeHandler;
