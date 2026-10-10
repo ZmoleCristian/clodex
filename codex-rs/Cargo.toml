@@ -620,6 +620,17 @@ opt-level = 0
 debug = "none"
 strip = "symbols"
 
+# Clodex: optimized daily-driver. No LTO, many codegen units, incremental → full build once,
+# then fast rebuilds of touched crates. Not for distribution.
+[profile.fast]
+inherits = "release"
+opt-level = 3
+lto = false
+codegen-units = 16
+incremental = true
+debug = "none"
+strip = "symbols"
+
 [profile.release]
 lto = "thin"
 debug = "line-tables-only"
