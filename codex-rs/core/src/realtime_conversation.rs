@@ -1557,6 +1557,12 @@ pub(crate) async fn build_realtime_session_config(
         (false, true) => prompt,
         (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
+    // Clodex: the desktop overrides the backend prompt, so the frontend never sees the tool rules
+    // from backend_prompt.md. Append them unconditionally.
+    let prompt = format!(
+        "{prompt}\n\n{}",
+        codex_prompts::CLODEX_FRONTEND_ADDENDUM.trim_end()
+    );
     if version != RealtimeWsVersion::V3 && !params.initial_items.is_empty() {
         return Err(CodexErr::InvalidRequest(
             "initial realtime items require realtime v3".to_string(),

@@ -25,6 +25,7 @@ pub use permissions_instructions::ApprovalPromptContext;
 pub use permissions_instructions::PermissionsInstructions;
 pub use realtime::BACKEND_PROMPT;
 pub use realtime::CLODEX_VOICE_ADDENDUM;
+pub use realtime::CLODEX_FRONTEND_ADDENDUM;
 pub use realtime::END_INSTRUCTIONS;
 pub use realtime::START_INSTRUCTIONS;
 pub use review_exit::render_review_exit_interrupted;

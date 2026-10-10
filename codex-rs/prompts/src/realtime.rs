@@ -4,3 +4,7 @@ pub const START_INSTRUCTIONS: &str = include_str!("../templates/realtime/realtim
 /// Clodex: rules for a Claude backend in a voice session, appended to every realtime start.
 pub const CLODEX_VOICE_ADDENDUM: &str =
     include_str!("../templates/realtime/clodex_voice_addendum.md");
+/// Clodex: tool rules for the voice frontend, appended to the session instructions even when the
+/// desktop sends its own prompt.
+pub const CLODEX_FRONTEND_ADDENDUM: &str =
+    include_str!("../templates/realtime/clodex_frontend_addendum.md");
