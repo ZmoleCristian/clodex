@@ -139,7 +139,11 @@ impl Usage {
 
 enum Block {
     None,
-    Text(String),
+    Text {
+        text: String,
+        /// URLs cited by this block, in first-seen order.
+        citations: Vec<String>,
+    },
     Thinking {
         text: String,
         signature: Option<String>,
@@ -167,6 +171,8 @@ struct State {
     /// Finished text waiting to see whether the next block continues it. Anthropic splits a
     /// cited answer into one `text` block per citation span; Codex wants one message.
     pending_text: Option<String>,
+    /// Unique cited URLs of the message being built; position + 1 is the `[[n]]` marker.
+    sources: Vec<String>,
 }
 
 impl State {
@@ -178,6 +184,7 @@ impl State {
             stop_reason: None,
             block: Block::None,
             pending_text: None,
+            sources: Vec::new(),
         }
     }
 
@@ -250,12 +257,16 @@ impl State {
         }
         match kind {
             "text" => {
-                self.block = match self.pending_text.take() {
-                    Some(text) => Block::Text(text),
+                let text = match self.pending_text.take() {
+                    Some(text) => text,
                     None => {
                         out.push(Ok(ResponseEvent::OutputItemAdded(message_item(String::new()))));
-                        Block::Text(String::new())
+                        String::new()
                     }
+                };
+                self.block = Block::Text {
+                    text,
+                    citations: Vec::new(),
                 };
             }
             "thinking" => {
@@ -320,10 +331,17 @@ impl State {
 
     fn delta(&mut self, delta: &Value, out: &mut Vec<Result<ResponseEvent, ApiError>>) {
         match (delta["type"].as_str().unwrap_or_default(), &mut self.block) {
-            ("text_delta", Block::Text(text)) => {
+            ("text_delta", Block::Text { text, .. }) => {
                 let piece = delta["text"].as_str().unwrap_or_default();
                 text.push_str(piece);
                 out.push(Ok(ResponseEvent::OutputTextDelta(piece.to_string())));
+            }
+            ("citations_delta", Block::Text { citations, .. }) => {
+                if let Some(url) = delta["citation"]["url"].as_str()
+                    && !citations.iter().any(|c| c == url)
+                {
+                    citations.push(url.to_string());
+                }
             }
             ("thinking_delta", Block::Thinking { text, .. }) => {
                 let piece = delta["thinking"].as_str().unwrap_or_default();
@@ -355,7 +373,18 @@ impl State {
     fn stop_block(&mut self, block: Block, out: &mut Vec<Result<ResponseEvent, ApiError>>) {
         match block {
             Block::None => {}
-            Block::Text(text) => {
+            Block::Text {
+                mut text,
+                citations,
+            } => {
+                let marks: String = citations
+                    .iter()
+                    .map(|url| format!(" [[{}]]({url})", self.source_index(url)))
+                    .collect();
+                if !marks.is_empty() {
+                    text.insert_str(text.trim_end().len(), &marks);
+                    out.push(Ok(ResponseEvent::OutputTextDelta(marks)));
+                }
                 self.pending_text = Some(text);
             }
             Block::Thinking { text, signature } => {
@@ -424,6 +453,17 @@ impl State {
     fn flush_text(&mut self, out: &mut Vec<Result<ResponseEvent, ApiError>>) {
         if let Some(text) = self.pending_text.take() {
             out.push(Ok(ResponseEvent::OutputItemDone(message_item(text))));
+        }
+        self.sources.clear();
+    }
+
+    fn source_index(&mut self, url: &str) -> usize {
+        match self.sources.iter().position(|s| s == url) {
+            Some(i) => i + 1,
+            None => {
+                self.sources.push(url.to_string());
+                self.sources.len()
+            }
         }
     }
 
