@@ -1817,6 +1817,14 @@ async fn handle_start_inner(
             if let RealtimeEvent::InterruptRequested { .. } = &event {
                 sess_clone.interrupt_task().await;
             }
+            // Clodex: on v1 the ChatGPT-hosted call never forwards our interrupt tool, so a
+            // spoken stop arrives as a plain handoff. Abort the running turn before routing it.
+            if let RealtimeEvent::HandoffRequested(handoff) = &event
+                && clodex_is_stop_intent(&handoff.input_transcript)
+            {
+                info!("clodex: stop intent in handoff, interrupting turn");
+                sess_clone.interrupt_task().await;
+            }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) => {
                     realtime_delegation_from_handoff(handoff)
@@ -1916,6 +1924,20 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
     (!handoff.input_transcript.is_empty())
         .then_some(handoff.input_transcript.clone())
         .or_else(|| realtime_transcript_delta_from_handoff(handoff))
+}
+
+/// Clodex: short utterances that mean "stop the current work" (ro/en).
+fn clodex_is_stop_intent(input: &str) -> bool {
+    let lower = input.to_lowercase();
+    if lower.chars().filter(|c| c.is_alphabetic()).count() > 60 {
+        return false;
+    }
+    [
+        "stop", "oprește", "opreste", "oprește-o", "opreşte", "cancel", "anulează", "anuleaza",
+        "abort",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 fn realtime_delegation_from_handoff(handoff: &RealtimeHandoffRequested) -> Option<String> {
