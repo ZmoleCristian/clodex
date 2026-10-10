@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
+use crate::clodex_exec_policy;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
@@ -249,6 +249,11 @@ impl ExecCommandHandler {
                 "TTY execution is disabled by config; omit `tty` or set it to false.".to_string(),
             ));
         }
+        if let Some(reason) = clodex_exec_policy::reject_reason(&args.cmd) {
+            return Err(FunctionCallError::RespondToModel(
+                clodex_exec_policy::rejection_message(&reason),
+            ));
+        }
         let sandbox_permissions =
             resolve_sandbox_permissions(args.sandbox_permissions, args.justification.as_deref())?;
         let hook_command = args.cmd.clone();
@@ -312,9 +317,9 @@ impl ExecCommandHandler {
             ExecCommandLifetime::Interactive => None,
             ExecCommandLifetime::OneShot => {
                 tty = false;
-                Some(Duration::from_millis(
-                    timeout_ms.unwrap_or(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
-                ))
+                Some(Duration::from_millis(clodex_exec_policy::clamp_timeout_ms(
+                    timeout_ms.unwrap_or(clodex_exec_policy::DEFAULT_TIMEOUT_MS),
+                )))
             }
         };
 
@@ -494,7 +499,7 @@ fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::number(Some(
-            "Maximum command runtime. Defaults to 10000 ms.".to_string(),
+            "Maximum command runtime. Defaults to 15000 ms, max 60000 ms.".to_string(),
         )),
     );
     spec.output_schema = spec.output_schema.map(|schema| {

@@ -61,7 +61,7 @@ struct ExecCommandEnvironmentArgs {
 }
 
 fn default_exec_yield_time_ms() -> u64 {
-    10_000
+    crate::clodex_exec_policy::DEFAULT_TIMEOUT_MS
 }
 
 fn default_write_stdin_yield_time_ms() -> u64 {

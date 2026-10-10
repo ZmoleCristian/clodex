@@ -30,7 +30,7 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
     let yield_time_ms_description = if cfg!(windows) {
         "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 10000-30000 ms."
     } else {
-        "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms."
+        "Wait before yielding output. Defaults to 15000 ms; max 60000 ms. The process is killed when the wait expires; run long work detached with setsid nohup."
     };
     let mut properties = BTreeMap::from([
         (

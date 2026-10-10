@@ -645,10 +645,13 @@ impl UnifiedExecProcessManager {
             deadline,
         )
         .await;
-        if let Some(completion) = completion.as_mut()
-            && !process.has_exited()
-        {
-            completion.timed_out = true;
+        // Clodex: every foreground wait is a hard timeout. Still alive at the
+        // deadline means SIGKILL on the process group; detached work survives.
+        let timed_out = !process.has_exited();
+        if timed_out {
+            if let Some(completion) = completion.as_mut() {
+                completion.timed_out = true;
+            }
             process.mark_timed_out();
             if let Err(err) = process.terminate_confirmed().await {
                 process.fail_and_terminate(err.to_string());
@@ -661,7 +664,10 @@ impl UnifiedExecProcessManager {
         ))
         .unwrap_or(usize::MAX);
         let output_omitted_bytes = NonZeroUsize::new(collected_output.omitted_bytes());
-        let collected = collected_output.to_bytes_with_omission_marker();
+        let mut collected = collected_output.to_bytes_with_omission_marker();
+        if timed_out {
+            collected.extend_from_slice(crate::clodex_exec_policy::killed_marker(wait).as_bytes());
+        }
         let text = String::from_utf8_lossy(&collected).to_string();
         let chunk_id = generate_chunk_id();
         if deferred_network_approval
@@ -732,10 +738,7 @@ impl UnifiedExecProcessManager {
                     {
                         return Err(fail_process_with_message(entry.process.as_ref(), message));
                     }
-                    if !completion
-                        .as_ref()
-                        .is_some_and(|completion| completion.timed_out)
-                    {
+                    if !timed_out {
                         process
                             .check_for_sandbox_denial_with_text(&text)
                             .await
@@ -835,7 +838,7 @@ impl UnifiedExecProcessManager {
                 .truncation_policy
                 .into(),
             max_output_tokens: request.max_output_tokens,
-            process_id: response_process_id,
+            process_id: if timed_out { None } else { response_process_id },
             exit_code,
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
@@ -1015,7 +1018,10 @@ impl UnifiedExecProcessManager {
             // writes keep a fixed max cap so interactive stdin remains responsive.
             let time_ms = request.yield_time_ms.max(MIN_YIELD_TIME_MS);
             if request.input.is_empty() {
-                time_ms.clamp(MIN_EMPTY_YIELD_TIME_MS, self.max_write_stdin_yield_time_ms)
+                time_ms.clamp(
+                    MIN_EMPTY_YIELD_TIME_MS,
+                    self.max_write_stdin_yield_time_ms.min(MAX_YIELD_TIME_MS),
+                )
             } else {
                 time_ms.min(MAX_YIELD_TIME_MS)
             }
