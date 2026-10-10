@@ -928,6 +928,15 @@ impl RealtimeConversationManager {
         output_text: String,
         phase: Option<MessagePhase>,
     ) -> CodexResult<()> {
+        // Clodex: Claude often emits a [STATUS] and an inline item in one message. The inline
+        // directive must start its own item, so split and deliver the parts in order.
+        const INLINE: &str = "::codex-realtime-inline{}";
+        if let Some(pos) = output_text.find(&format!("\n{INLINE}")) {
+            let head = output_text[..pos].to_string();
+            let tail = output_text[pos + 1..].to_string();
+            Box::pin(self.handoff_out(head, phase.clone())).await?;
+            return Box::pin(self.handoff_out(tail, phase)).await;
+        }
         let output_text = clodex_tag_untagged(output_text);
         let handoff = {
             let guard = self.state.lock().await;
@@ -1559,18 +1568,10 @@ pub(crate) async fn build_realtime_session_config(
                 .unwrap_or_default()
         }
     };
-    let startup_items = if existing_call && !startup_context.is_empty() {
-        vec![ConversationTextParams {
-            // Clodex: the voice model treats a bare developer item as content to read aloud
-            // (it spoke code snippets from the thread). Frame it as silent background context.
-            text: format!(
-                "Silent background context for the voice assistant. Do not read, quote, or mention this item; it only helps you answer with the right context. Never say code, paths, commit hashes or file names from it aloud.\n\n{startup_context}\n\nStay quiet now; wait for the user to speak."
-            ),
-            role: ConversationTextRole::Developer,
-        }]
-    } else {
-        Vec::new()
-    };
+    // Clodex: on an existing (desktop) call any conversation item we inject makes the voice
+    // model respond to it and read it aloud, even when framed as silent. The backend has the
+    // whole thread anyway and opens with context on the first delegation, so send nothing.
+    let startup_items: Vec<ConversationTextParams> = Vec::new();
     let startup_context = if existing_call {
         String::new()
     } else {
