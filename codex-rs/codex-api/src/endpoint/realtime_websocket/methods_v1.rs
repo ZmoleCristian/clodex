@@ -11,9 +11,16 @@ use crate::endpoint::realtime_websocket::protocol::SessionAudio;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioFormat;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
+use crate::endpoint::realtime_websocket::protocol::SessionFunctionTool;
+use crate::endpoint::realtime_websocket::protocol::SessionToolType;
 use crate::endpoint::realtime_websocket::protocol::SessionType;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 use codex_protocol::protocol::ConversationTextRole;
+use serde_json::json;
+
+// Clodex: the desktop voice call runs on v1; advertise the interrupt tool there too.
+const REALTIME_V1_INTERRUPT_TOOL_NAME: &str = "interrupt_background_agent";
+const REALTIME_V1_INTERRUPT_TOOL_DESCRIPTION: &str = "Call this when the user asks to stop, cancel or abort the current work. It interrupts the background agent's running task immediately; a later request starts a fresh task. This does not end the voice call.";
 
 pub(super) fn conversation_item_create_message(
     text: String,
@@ -73,8 +80,17 @@ pub(super) fn session_update_session(
                 voice,
             }),
         },
-        tools: None,
-        tool_choice: None,
+        tools: Some(vec![SessionFunctionTool {
+            r#type: SessionToolType::Function,
+            name: REALTIME_V1_INTERRUPT_TOOL_NAME.to_string(),
+            description: REALTIME_V1_INTERRUPT_TOOL_DESCRIPTION.to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }]),
+        tool_choice: Some("auto".to_string()),
     }
 }
 

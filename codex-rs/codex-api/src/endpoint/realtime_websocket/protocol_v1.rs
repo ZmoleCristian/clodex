@@ -92,6 +92,22 @@ pub(super) fn parse_realtime_event_v1(payload: &str) -> Option<RealtimeEvent> {
 
 fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
     let item = parsed.get("item")?.as_object()?;
+    // Clodex: the voice can call interrupt_background_agent on v1 too.
+    if item.get("type").and_then(Value::as_str) == Some("function_call")
+        && item.get("name").and_then(Value::as_str) == Some("interrupt_background_agent")
+    {
+        let call_id = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("id").and_then(Value::as_str))?
+            .to_string();
+        let item_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or(&call_id)
+            .to_string();
+        return Some(RealtimeEvent::InterruptRequested { call_id, item_id });
+    }
     item.get("id")
         .and_then(Value::as_str)
         .map(str::to_string)

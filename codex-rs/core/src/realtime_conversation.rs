@@ -919,6 +919,7 @@ impl RealtimeConversationManager {
         output_text: String,
         phase: Option<MessagePhase>,
     ) -> CodexResult<()> {
+        let output_text = clodex_tag_untagged(output_text);
         let handoff = {
             let guard = self.state.lock().await;
             let Some(state) = guard.conversation.as_ref() else {
@@ -1654,6 +1655,20 @@ fn prefix_realtime_text(text: String, prefix: &str, session_kind: RealtimeSessio
         return text;
     }
     format!("{prefix}{text}")
+}
+
+/// Clodex: the voice frontend only reads tagged backend messages. Untagged commentary (text the
+/// model emits between tool calls) is tagged [STATUS] so it is spoken instead of dropped.
+fn clodex_tag_untagged(text: String) -> String {
+    let trimmed = text.trim_start();
+    if trimmed.is_empty()
+        || trimmed.starts_with("[STATUS]")
+        || trimmed.starts_with("[COMPLETE]")
+        || trimmed.starts_with("::codex-realtime-inline")
+    {
+        return text;
+    }
+    format!("[STATUS] {trimmed}")
 }
 
 fn realtime_backend_output(output_text: String, session_kind: RealtimeSessionKind) -> String {
