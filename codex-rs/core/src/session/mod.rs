@@ -2317,6 +2317,8 @@ impl Session {
             .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
+        self.maybe_synthesize_missing_voice_answer(&legacy_source)
+            .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)
             .await;
 
@@ -2451,6 +2453,43 @@ impl Session {
         };
         if let Err(err) = result {
             debug!("failed to mirror event text to realtime conversation: {err}");
+        }
+    }
+
+    /// Clodex: when a turn ends during a voice session without any backend text having reached
+    /// the voice, speak a synthetic [COMPLETE] (content filter / provider error / tool-only step).
+    async fn maybe_synthesize_missing_voice_answer(&self, msg: &EventMsg) {
+        if self.conversation.running_state().await.is_none() {
+            return;
+        }
+        match msg {
+            EventMsg::TurnStarted(_) => self.conversation.begin_voice_turn().await,
+            EventMsg::Error(error) => {
+                self.conversation
+                    .note_voice_turn_error(&error.message)
+                    .await
+            }
+            EventMsg::TurnComplete(_) => {
+                if let Err(err) = self.conversation.synthesize_missing_voice_answer().await {
+                    debug!("failed to send synthetic voice answer: {err}");
+                }
+            }
+            EventMsg::TurnAborted(event)
+                if !matches!(
+                    event.reason,
+                    TurnAbortReason::Interrupted | TurnAbortReason::Replaced
+                ) =>
+            {
+                if let Err(err) = self.conversation.synthesize_missing_voice_answer().await {
+                    debug!("failed to send synthetic voice answer: {err}");
+                    return;
+                }
+                if let Err(err) = self.conversation.handoff_complete().await {
+                    debug!("failed to finalize realtime handoff output: {err}");
+                }
+                self.conversation.clear_active_handoff().await;
+            }
+            _ => {}
         }
     }
 

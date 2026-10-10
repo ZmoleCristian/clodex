@@ -178,6 +178,8 @@ struct RealtimeConversationManagerState {
     mode_instructions: Option<RealtimeModeInstructions>,
     // Keep context active until the terminal transcript is recorded.
     context_active: bool,
+    // Clodex: last error message seen during the current turn, for the synthetic voice answer.
+    turn_error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -203,6 +205,8 @@ struct RealtimeHandoffState {
     output_tx: Sender<RealtimeOutbound>,
     last_output: Arc<Mutex<Option<RealtimeHandoffOutput>>>,
     stream: Arc<Mutex<RealtimeHandoffStreamState>>,
+    // Clodex: set once any non-empty backend text reached the voice during the current turn.
+    turn_delivered: Arc<AtomicBool>,
     client_managed_handoffs: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
@@ -564,6 +568,7 @@ impl RealtimeConversationManager {
                 conversation: None,
                 mode_instructions: None,
                 context_active: false,
+                turn_error: None,
             }),
         }
     }
@@ -676,6 +681,7 @@ impl RealtimeConversationManager {
             output_tx: handoff_output_tx,
             last_output: Arc::new(Mutex::new(None)),
             stream: Arc::new(Mutex::new(RealtimeHandoffStreamState::default())),
+            turn_delivered: Arc::new(AtomicBool::new(false)),
             client_managed_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
@@ -938,6 +944,7 @@ impl RealtimeConversationManager {
             return Box::pin(self.handoff_out(tail, phase)).await;
         }
         let output_text = clodex_tag_untagged(output_text);
+        let visible = !output_text.trim().is_empty();
         let handoff = {
             let guard = self.state.lock().await;
             let Some(state) = guard.conversation.as_ref() else {
@@ -1024,7 +1031,55 @@ impl RealtimeConversationManager {
             .send(output)
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        if visible {
+            handoff.turn_delivered.store(true, Ordering::Relaxed);
+        }
         Ok(())
+    }
+
+    /// Clodex: a new turn started; nothing has been spoken for it yet.
+    pub(crate) async fn begin_voice_turn(&self) {
+        let mut guard = self.state.lock().await;
+        guard.turn_error = None;
+        if let Some(state) = guard.conversation.as_ref() {
+            state.handoff.turn_delivered.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// Clodex: remember the error that ended (or will end) the current turn.
+    pub(crate) async fn note_voice_turn_error(&self, message: &str) {
+        let mut guard = self.state.lock().await;
+        if guard.conversation.is_some() {
+            guard.turn_error = Some(message.trim().to_string());
+        }
+    }
+
+    /// Clodex: the turn ended; if the voice never received any backend text (content filter,
+    /// provider error, or a last step that was only thinking + tool_use), speak a synthetic
+    /// [COMPLETE] so the frontend does not sit in silence.
+    pub(crate) async fn synthesize_missing_voice_answer(&self) -> CodexResult<()> {
+        let (delivered, error) = {
+            let mut guard = self.state.lock().await;
+            let inner = &mut *guard;
+            let Some(state) = inner.conversation.as_ref() else {
+                return Ok(());
+            };
+            (
+                state.handoff.turn_delivered.swap(true, Ordering::Relaxed),
+                inner.turn_error.take(),
+            )
+        };
+        if delivered {
+            return Ok(());
+        }
+        let mut text = String::from(
+            "[COMPLETE] The backend stopped without a visible answer. This is usually a content filter or a provider error; rephrase and ask again.",
+        );
+        if let Some(error) = error.filter(|error| !error.is_empty()) {
+            text.push_str(" Error: ");
+            text.push_str(&error);
+        }
+        self.handoff_out(text, Some(MessagePhase::FinalAnswer)).await
     }
 
     pub(crate) async fn register_handoff_stream_item(
@@ -1146,6 +1201,7 @@ impl RealtimeConversationManager {
         let chunk = streamed_item.drain_final_chunk();
         let sent_output = streamed_item.sent_bytes > 0;
         if let Some(text) = chunk {
+            handoff.turn_delivered.store(true, Ordering::Relaxed);
             let _ = handoff
                 .output_tx
                 .send(RealtimeOutbound::HandoffAppend {
@@ -2356,6 +2412,7 @@ async fn flush_streamed_handoff_item(handoff: &RealtimeHandoffState, item_id: &s
             streamed_item.phase.clone(),
         )
     };
+    handoff.turn_delivered.store(true, Ordering::Relaxed);
     let _ = handoff
         .output_tx
         .send(RealtimeOutbound::HandoffAppend {
