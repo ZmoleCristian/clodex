@@ -6,6 +6,8 @@ use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::plaintext_agent_message_content;
+use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::SessionSource;
 use codex_thread_store::ListThreadsParams;
 use codex_thread_store::SortDirection;
 use codex_thread_store::StoredThread;
@@ -20,7 +22,6 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::DirEntry;
 use std::io;
-use std::mem::take;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
@@ -35,6 +36,10 @@ const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 2_200;
 const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
 const NOTES_SECTION_TOKEN_BUDGET: usize = 300;
 pub(crate) const REALTIME_TURN_TOKEN_BUDGET: usize = 300;
+const MAX_RECENT_USER_REQUESTS: usize = 3;
+const USER_REQUEST_TOKEN_BUDGET: usize = 120;
+const MAX_CHANGED_FILES: usize = 20;
+const MAX_OPEN_SUBAGENTS: usize = 10;
 const MAX_RECENT_THREADS: usize = 40;
 const MAX_RECENT_WORK_GROUPS: usize = 8;
 const MAX_CURRENT_CWD_ASKS: usize = 8;
@@ -64,7 +69,8 @@ pub(crate) async fn build_realtime_startup_context(
     let cwd = config.cwd.clone();
     let current_thread_section = {
         let history = sess.clone_history().await;
-        build_current_thread_section(history.raw_items())
+        let open_subagents = load_open_subagents(sess).await;
+        build_current_thread_section(history.raw_items(), &open_subagents)
     };
     let recent_threads = load_recent_threads(sess).await;
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads).await;
@@ -212,10 +218,12 @@ async fn build_recent_work_section(
 
 fn build_current_thread_section<'a>(
     items: impl IntoIterator<Item = &'a ResponseItem>,
+    open_subagents: &[String],
 ) -> Option<String> {
-    let mut turns = Vec::new();
-    let mut current_user = Vec::new();
-    let mut current_assistant = Vec::new();
+    let mut user_requests: Vec<String> = Vec::new();
+    let mut last_assistant: Option<String> = None;
+    let mut last_tagged: Option<String> = None;
+    let mut changed_files: Vec<String> = Vec::new();
 
     for item in items {
         match item {
@@ -229,90 +237,157 @@ fn build_current_thread_section<'a>(
                 else {
                     continue;
                 };
-                if !current_user.is_empty() || !current_assistant.is_empty() {
-                    turns.push((take(&mut current_user), take(&mut current_assistant)));
-                }
-                current_user.push(text);
+                user_requests.push(text);
+                changed_files.clear();
             }
             ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                if user_requests.is_empty() {
+                    continue;
+                }
                 let Some(text) = content_items_to_text(content)
                     .map(|text| text.trim().to_string())
                     .filter(|text| !text.is_empty())
                 else {
                     continue;
                 };
-                if current_user.is_empty() && current_assistant.is_empty() {
-                    continue;
+                if is_tagged_backend_message(&text) {
+                    last_tagged = Some(text.clone());
                 }
-                current_assistant.push(text);
+                last_assistant = Some(text);
             }
             ResponseItem::AgentMessage {
                 author, content, ..
             } => {
+                if user_requests.is_empty() {
+                    continue;
+                }
                 let Some(text) = plaintext_agent_message_content(content) else {
                     continue;
                 };
-                if current_user.is_empty() && current_assistant.is_empty() {
-                    continue;
-                }
-                current_assistant.push(format!("Agent message from {author}:\n{text}"));
+                last_assistant = Some(format!("Agent message from {author}:\n{text}"));
+            }
+            ResponseItem::FunctionCall {
+                name, arguments, ..
+            } if name == "apply_patch" => {
+                let patch = serde_json::from_str::<serde_json::Value>(arguments)
+                    .ok()
+                    .and_then(|value| value.get("input")?.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| arguments.clone());
+                collect_patch_files(&patch, &mut changed_files);
+            }
+            ResponseItem::CustomToolCall { name, input, .. } if name == "apply_patch" => {
+                collect_patch_files(input, &mut changed_files);
             }
             _ => {}
         }
     }
 
-    if !current_user.is_empty() || !current_assistant.is_empty() {
-        turns.push((current_user, current_assistant));
-    }
-
-    if turns.is_empty() {
+    if user_requests.is_empty() {
         return None;
     }
 
     let mut lines = vec![
-        "Most recent user/assistant turns from this exact thread. Use them for continuity when responding.".to_string(),
+        "Continuity for this exact thread. The backend agent already has the full history; do not ask the user to repeat it.".to_string(),
+        String::new(),
+        "Last user requests (oldest first):".to_string(),
     ];
-    let mut remaining_budget =
-        CURRENT_THREAD_SECTION_TOKEN_BUDGET.saturating_sub(approx_token_count(&lines.join("\n")));
-    let mut retained_turn_count = 0;
-
-    for (index, (user_messages, assistant_messages)) in turns.into_iter().rev().enumerate() {
-        if remaining_budget == 0 {
-            break;
-        }
-
-        let mut turn_lines = Vec::new();
-        if index == 0 {
-            turn_lines.push("### Latest turn".to_string());
-        } else {
-            turn_lines.push(format!("### Previous turn {index}"));
-        }
-
-        if !user_messages.is_empty() {
-            turn_lines.push("User:".to_string());
-            turn_lines.push(user_messages.join("\n\n"));
-        }
-        if !assistant_messages.is_empty() {
-            turn_lines.push(String::new());
-            turn_lines.push("Assistant:".to_string());
-            turn_lines.push(assistant_messages.join("\n\n"));
-        }
-
-        let turn_budget = REALTIME_TURN_TOKEN_BUDGET.min(remaining_budget);
-        let turn_text = turn_lines.join("\n");
-        let turn_text = truncate_realtime_text_to_token_budget(&turn_text, turn_budget);
-        let turn_tokens = approx_token_count(&turn_text);
-        if turn_tokens == 0 {
-            continue;
-        }
-
-        lines.push(String::new());
-        lines.push(turn_text);
-        remaining_budget = remaining_budget.saturating_sub(turn_tokens);
-        retained_turn_count += 1;
+    let skip = user_requests.len().saturating_sub(MAX_RECENT_USER_REQUESTS);
+    for (index, request) in user_requests.iter().skip(skip).enumerate() {
+        let request = truncate_realtime_text_to_token_budget(request, USER_REQUEST_TOKEN_BUDGET);
+        lines.push(format!("{}. {request}", index + 1));
     }
 
-    (retained_turn_count > 0).then(|| lines.join("\n"))
+    if let Some(message) = last_tagged.or(last_assistant) {
+        lines.push(String::new());
+        lines.push("Last assistant message:".to_string());
+        lines.push(truncate_realtime_text_to_token_budget(
+            &message,
+            REALTIME_TURN_TOKEN_BUDGET,
+        ));
+    }
+
+    if !changed_files.is_empty() {
+        lines.push(String::new());
+        lines.push("Files changed in the last turn:".to_string());
+        for file in changed_files.iter().take(MAX_CHANGED_FILES) {
+            lines.push(format!("- {file}"));
+        }
+        if changed_files.len() > MAX_CHANGED_FILES {
+            lines.push(format!(
+                "- ... {} more",
+                changed_files.len() - MAX_CHANGED_FILES
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    if open_subagents.is_empty() {
+        lines.push("Open subagents: none".to_string());
+    } else {
+        lines.push("Open subagents:".to_string());
+        for agent in open_subagents.iter().take(MAX_OPEN_SUBAGENTS) {
+            lines.push(format!("- {agent}"));
+        }
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn is_tagged_backend_message(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("[COMPLETE]") || text.starts_with("[STATUS]")
+}
+
+fn collect_patch_files(patch: &str, files: &mut Vec<String>) {
+    for line in patch.lines() {
+        let path = ["*** Update File: ", "*** Add File: ", "*** Delete File: "]
+            .iter()
+            .find_map(|prefix| line.strip_prefix(prefix))
+            .map(str::trim);
+        if let Some(path) = path
+            && !path.is_empty()
+            && !files.iter().any(|known| known == path)
+        {
+            files.push(path.to_string());
+        }
+    }
+}
+
+async fn load_open_subagents(sess: &Session) -> Vec<String> {
+    let thread_id = sess.thread_id();
+    let agents = match sess
+        .services
+        .agent_control
+        .list(thread_id, None, &SessionSource::default(), None)
+        .await
+    {
+        Ok(agents) => agents,
+        Err(err) => {
+            warn!("failed to list subagents for realtime startup context: {err}");
+            return Vec::new();
+        }
+    };
+    agents
+        .into_iter()
+        .filter(|agent| agent.thread_id != thread_id)
+        .filter_map(|agent| {
+            let status = match agent.status {
+                AgentStatus::PendingInit => "starting",
+                AgentStatus::Running => "running",
+                AgentStatus::Interrupted => "interrupted",
+                AgentStatus::Completed(_) => "completed",
+                AgentStatus::Errored(_) => "errored",
+                AgentStatus::Shutdown | AgentStatus::NotFound => return None,
+            };
+            let name = agent
+                .metadata
+                .agent_nickname
+                .clone()
+                .or_else(|| agent.metadata.agent_path.as_ref().map(ToString::to_string))
+                .unwrap_or_else(|| agent.thread_id.to_string());
+            Some(format!("{name}: {status}"))
+        })
+        .collect()
 }
 
 pub(crate) fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: usize) -> String {

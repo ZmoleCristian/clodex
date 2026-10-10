@@ -728,6 +728,10 @@ impl RealtimeConversationManager {
             });
             (task, Some(call.sdp))
         } else if let Some(call_id) = existing_call_id {
+            // Clodex: v1 existing calls get no session.update; the startup context rides as the
+            // first conversation item through the regular text input path.
+            let mut session_config = session_config;
+            let startup_items = std::mem::take(&mut session_config.initial_items);
             let task = existing_call::attach(existing_call::ExistingCallAttachment {
                 client,
                 model_client,
@@ -744,6 +748,11 @@ impl RealtimeConversationManager {
                 stop_token: stop_token.clone(),
             })
             .await?;
+            for item in startup_items {
+                if let Err(err) = text_tx.send(item).await {
+                    warn!("failed to queue realtime startup context: {err}");
+                }
+            }
             (task, None)
         } else {
             let connection = client
@@ -1536,21 +1545,32 @@ pub(crate) async fn build_realtime_session_config(
         config.experimental_realtime_ws_backend_prompt.clone(),
     );
     // Clodex: the desktop starts voice with includeStartupContext=false; the voice model gets the
-    // thread and workspace context anyway. Existing calls take no session configuration.
-    let startup_context = if matches!(
+    // thread and workspace context anyway. An existing call never receives session.update, so its
+    // context travels as the first developer conversation item instead of inside the instructions.
+    let existing_call = matches!(
         params.transport,
         Some(ConversationStartTransport::ExistingCall { .. })
-    ) {
+    );
+    let startup_context = match config.experimental_realtime_ws_startup_context.clone() {
+        Some(startup_context) => startup_context,
+        None => {
+            build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
+                .await
+                .unwrap_or_default()
+        }
+    };
+    let startup_items = if existing_call && !startup_context.is_empty() {
+        vec![ConversationTextParams {
+            text: startup_context.clone(),
+            role: ConversationTextRole::Developer,
+        }]
+    } else {
+        Vec::new()
+    };
+    let startup_context = if existing_call {
         String::new()
     } else {
-        match config.experimental_realtime_ws_startup_context.clone() {
-            Some(startup_context) => startup_context,
-            None => {
-                build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
-                    .await
-                    .unwrap_or_default()
-            }
-        }
+        startup_context
     };
     let prompt = match (prompt.is_empty(), startup_context.is_empty()) {
         (true, true) => String::new(),
@@ -1626,7 +1646,11 @@ pub(crate) async fn build_realtime_session_config(
     validate_realtime_voice(version, voice)?;
     Ok(RealtimeSessionConfig {
         instructions: prompt,
-        initial_items: params.initial_items.clone(),
+        initial_items: if startup_items.is_empty() {
+            params.initial_items.clone()
+        } else {
+            startup_items
+        },
         delegation_ack_filler: params.delegation_ack_filler,
         model,
         session_id: Some(
