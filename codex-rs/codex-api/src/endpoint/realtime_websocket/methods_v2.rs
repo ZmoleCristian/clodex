@@ -34,6 +34,8 @@ const REALTIME_V2_BACKGROUND_AGENT_TOOL_NAME: &str = "background_agent";
 const REALTIME_V2_BACKGROUND_AGENT_TOOL_DESCRIPTION: &str = "Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.";
 const REALTIME_V2_SILENCE_TOOL_NAME: &str = "remain_silent";
 const REALTIME_V2_SILENCE_TOOL_DESCRIPTION: &str = "Call this when the best response is to say nothing. Use it instead of speaking after hidden system/control messages, after background agent updates in silent modes, or whenever acknowledging aloud would be distracting. This tool has no user-visible effect.";
+const REALTIME_V2_INTERRUPT_TOOL_NAME: &str = "interrupt_background_agent";
+const REALTIME_V2_INTERRUPT_TOOL_DESCRIPTION: &str = "Call this when the user asks to stop, cancel or abort the current work. It interrupts the background agent's running task immediately; a later request starts a fresh task. This does not end the voice call.";
 const REALTIME_V2_INPUT_TRANSCRIPTION_MODEL: &str = "gpt-4o-mini-transcribe";
 
 pub(super) fn conversation_item_create_message(
@@ -133,6 +135,16 @@ pub(super) fn session_update_session(
                     r#type: SessionToolType::Function,
                     name: REALTIME_V2_SILENCE_TOOL_NAME.to_string(),
                     description: REALTIME_V2_SILENCE_TOOL_DESCRIPTION.to_string(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                    }),
+                },
+                SessionFunctionTool {
+                    r#type: SessionToolType::Function,
+                    name: REALTIME_V2_INTERRUPT_TOOL_NAME.to_string(),
+                    description: REALTIME_V2_INTERRUPT_TOOL_DESCRIPTION.to_string(),
                     parameters: json!({
                         "type": "object",
                         "properties": {},

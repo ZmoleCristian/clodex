@@ -445,6 +445,10 @@ pub enum RealtimeEvent {
     HistoryItemCompleted(crate::realtime::RealtimeItem),
     HandoffRequested(RealtimeHandoffRequested),
     NoopRequested(RealtimeNoopRequested),
+    InterruptRequested {
+        call_id: String,
+        item_id: String,
+    },
     Error(String),
 }
 

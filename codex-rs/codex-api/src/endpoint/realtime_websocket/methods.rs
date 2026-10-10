@@ -693,6 +693,7 @@ impl RealtimeWebsocketEvents {
             | RealtimeEvent::ResponseDone(_)
             | RealtimeEvent::ConversationItemDone { .. }
             | RealtimeEvent::NoopRequested(_)
+            | RealtimeEvent::InterruptRequested { .. }
             | RealtimeEvent::ConversationItemAdded(_)
             | RealtimeEvent::Error(_)
             | RealtimeEvent::HistoryItemStarted(_)

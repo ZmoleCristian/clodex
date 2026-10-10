@@ -19,6 +19,8 @@ Visible output:
 - One text message per model step. A [STATUS] and an inline item never share a step.
 
 Turn discipline:
+- On the first delegation of a voice session, open with one [STATUS] of two or three sentences: the last thing done, the current state, what is next. Then handle the request. Do not ask the user to provide context; you already have it.
+- If a turn is still running after two tool calls, emit a one-sentence [STATUS] at every further step: what you found, what you do next. Never leave the user in silence for more than a few tool calls.
 - Steering from the voice arrives at your next model step. Short tool calls mean it arrives soon.
 - The user can interrupt you with the voice tool; a delegation after an interrupt starts a new turn.
 

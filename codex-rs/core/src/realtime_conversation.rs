@@ -118,6 +118,9 @@ const REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
     "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
+const REALTIME_V2_INTERRUPT_ACKNOWLEDGEMENT: &str = "interrupted";
+const REALTIME_V2_HANDOFF_INTERRUPTED_ACKNOWLEDGEMENT: &str =
+    "Background agent task interrupted by the user. The next request starts a new task.";
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 const REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION: &str = "The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.";
@@ -1531,7 +1534,14 @@ pub(crate) async fn build_realtime_session_config(
         params.prompt.clone(),
         config.experimental_realtime_ws_backend_prompt.clone(),
     );
-    let startup_context = if params.include_startup_context {
+    // Clodex: the desktop starts voice with includeStartupContext=false; the voice model gets the
+    // thread and workspace context anyway. Existing calls take no session configuration.
+    let startup_context = if matches!(
+        params.transport,
+        Some(ConversationStartTransport::ExistingCall { .. })
+    ) {
+        String::new()
+    } else {
         match config.experimental_realtime_ws_startup_context.clone() {
             Some(startup_context) => startup_context,
             None => {
@@ -1540,8 +1550,6 @@ pub(crate) async fn build_realtime_session_config(
                     .unwrap_or_default()
             }
         }
-    } else {
-        String::new()
     };
     let prompt = match (prompt.is_empty(), startup_context.is_empty()) {
         (true, true) => String::new(),
@@ -1784,6 +1792,9 @@ async fn handle_start_inner(
             }
             if let RealtimeEvent::Error(_) = &event {
                 end = RealtimeConversationEnd::Error;
+            }
+            if let RealtimeEvent::InterruptRequested { .. } = &event {
+                sess_clone.interrupt_task().await;
             }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) => {
@@ -2657,6 +2668,39 @@ async fn handle_realtime_server_event(
                         warn!("failed to send realtime noop function output: {err}");
                         return Err(err.into());
                     }
+                }
+            }
+            false
+        }
+        RealtimeEvent::InterruptRequested { call_id, .. } => {
+            *output_audio_state = None;
+
+            match session_kind {
+                RealtimeSessionKind::V1 => {}
+                RealtimeSessionKind::V2 => {
+                    let interrupted_handoff = {
+                        let mut stream = handoff_state.stream.lock().await;
+                        stream.items.clear();
+                        stream.active_handoff.take()
+                    };
+                    *handoff_state.last_output.lock().await = None;
+                    if let Some(handoff_id) = interrupted_handoff {
+                        writer
+                            .send_conversation_function_call_output(
+                                handoff_id,
+                                REALTIME_V2_HANDOFF_INTERRUPTED_ACKNOWLEDGEMENT.to_string(),
+                            )
+                            .await?;
+                    }
+                    writer
+                        .send_conversation_function_call_output(
+                            call_id.clone(),
+                            REALTIME_V2_INTERRUPT_ACKNOWLEDGEMENT.to_string(),
+                        )
+                        .await?;
+                    response_create_queue
+                        .request_create(writer, "interrupt")
+                        .await?;
                 }
             }
             false

@@ -17,6 +17,7 @@ use tracing::debug;
 
 const BACKGROUND_AGENT_TOOL_NAME: &str = "background_agent";
 const SILENCE_TOOL_NAME: &str = "remain_silent";
+const INTERRUPT_TOOL_NAME: &str = "interrupt_background_agent";
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const DEFAULT_AUDIO_CHANNELS: u16 = 1;
 const TOOL_ARGUMENT_KEYS: [&str; 5] = ["input_transcript", "input", "text", "prompt", "query"];
@@ -132,6 +133,9 @@ fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
     if let Some(noop) = parse_noop_requested_event(item) {
         return Some(noop);
     }
+    if let Some(interrupt) = parse_interrupt_requested_event(item) {
+        return Some(interrupt);
+    }
 
     item.get("id")
         .and_then(Value::as_str)
@@ -166,9 +170,25 @@ fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<Realti
 }
 
 fn parse_noop_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {
+    let (call_id, item_id) = parse_function_call_ids(item, SILENCE_TOOL_NAME)?;
+    Some(RealtimeEvent::NoopRequested(RealtimeNoopRequested {
+        call_id,
+        item_id,
+    }))
+}
+
+fn parse_interrupt_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {
+    let (call_id, item_id) = parse_function_call_ids(item, INTERRUPT_TOOL_NAME)?;
+    Some(RealtimeEvent::InterruptRequested { call_id, item_id })
+}
+
+fn parse_function_call_ids(
+    item: &JsonMap<String, Value>,
+    name: &str,
+) -> Option<(String, String)> {
     let item_type = item.get("type").and_then(Value::as_str);
     let item_name = item.get("name").and_then(Value::as_str);
-    if item_type != Some("function_call") || item_name != Some(SILENCE_TOOL_NAME) {
+    if item_type != Some("function_call") || item_name != Some(name) {
         return None;
     }
 
@@ -176,16 +196,8 @@ fn parse_noop_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeE
         .get("call_id")
         .and_then(Value::as_str)
         .or_else(|| item.get("id").and_then(Value::as_str))?;
-    let item_id = item
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or(call_id)
-        .to_string();
-
-    Some(RealtimeEvent::NoopRequested(RealtimeNoopRequested {
-        call_id: call_id.to_string(),
-        item_id,
-    }))
+    let item_id = item.get("id").and_then(Value::as_str).unwrap_or(call_id);
+    Some((call_id.to_string(), item_id.to_string()))
 }
 
 fn extract_input_transcript(arguments: &str) -> String {
