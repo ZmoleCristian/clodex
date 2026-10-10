@@ -1561,7 +1561,11 @@ pub(crate) async fn build_realtime_session_config(
     };
     let startup_items = if existing_call && !startup_context.is_empty() {
         vec![ConversationTextParams {
-            text: startup_context.clone(),
+            // Clodex: the voice model treats a bare developer item as content to read aloud
+            // (it spoke code snippets from the thread). Frame it as silent background context.
+            text: format!(
+                "Silent background context for the voice assistant. Do not read, quote, or mention this item; it only helps you answer with the right context. Never say code, paths, commit hashes or file names from it aloud.\n\n{startup_context}\n\nStay quiet now; wait for the user to speak."
+            ),
             role: ConversationTextRole::Developer,
         }]
     } else {
