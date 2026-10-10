@@ -3,6 +3,7 @@
 use crate::CLAUDE_CODE_SYSTEM_INSTRUCTION;
 use crate::TOOL_PREFIX;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -274,39 +275,50 @@ fn messages_json(items: &[ResponseItem]) -> Vec<Value> {
             ResponseItem::Reasoning {
                 summary,
                 content,
-                encrypted_content: Some(signature),
+                encrypted_content,
                 ..
             } => {
-                if let Some(data) = signature.strip_prefix(REDACTED_THINKING_PREFIX) {
+                if let Some(data) = encrypted_content
+                    .as_deref()
+                    .and_then(|s| s.strip_prefix(REDACTED_THINKING_PREFIX))
+                {
                     messages.push(
                         "assistant",
                         json!({"type": "redacted_thinking", "data": data}),
                     );
-                } else if signature.contains(':') || signature.starts_with("gAAAAA") {
-                    // Not an Anthropic signature: an opencodex-wrapped "ocxr1:…" or an OpenAI
-                    // Fernet blob ("gAAAAA…") from a thread that ran on a Responses provider.
-                    // Anthropic rejects both; drop the thinking block, keep the rest of history.
                     continue;
-                } else {
-                    let mut text: Vec<&str> = summary
+                }
+                let mut text: Vec<&str> = summary
+                    .iter()
+                    .map(|ReasoningItemReasoningSummary::SummaryText { text }| text.as_str())
+                    .collect();
+                if text.is_empty()
+                    && let Some(content) = content
+                {
+                    text = content
                         .iter()
-                        .map(|ReasoningItemReasoningSummary::SummaryText { text }| text.as_str())
+                        .map(|part| match part {
+                            ReasoningItemContent::ReasoningText { text }
+                            | ReasoningItemContent::Text { text } => text.as_str(),
+                        })
                         .collect();
-                    if text.is_empty()
-                        && let Some(content) = content
-                    {
-                        text = content
-                            .iter()
-                            .map(|part| match part {
-                                ReasoningItemContent::ReasoningText { text }
-                                | ReasoningItemContent::Text { text } => text.as_str(),
-                            })
-                            .collect();
+                }
+                let text = text.join("");
+                // Only a native Anthropic signature can be replayed as a thinking block. An
+                // opencodex-wrapped "ocxr1:…" or OpenAI Fernet blob ("gAAAAA…") is rejected by
+                // the API, and unsigned items have nothing to verify; keep their text as plain
+                // assistant prose so the model still sees what it reasoned.
+                match encrypted_content.as_deref() {
+                    Some(signature) if !signature.contains(':') && !signature.starts_with("gAAAAA") => {
+                        messages.push(
+                            "assistant",
+                            json!({"type": "thinking", "thinking": text, "signature": signature}),
+                        );
                     }
-                    messages.push(
-                        "assistant",
-                        json!({"type": "thinking", "thinking": text.join(""), "signature": signature}),
-                    );
+                    _ if !text.is_empty() => {
+                        messages.push("assistant", json!({"type": "text", "text": format!("[thinking]\n{text}")}));
+                    }
+                    _ => {}
                 }
             }
             ResponseItem::FunctionCall {
@@ -333,6 +345,7 @@ fn messages_json(items: &[ResponseItem]) -> Vec<Value> {
             ResponseItem::CustomToolCall {
                 call_id,
                 name,
+                namespace,
                 input,
                 ..
             } => {
@@ -341,10 +354,32 @@ fn messages_json(items: &[ResponseItem]) -> Vec<Value> {
                     json!({
                         "type": "tool_use",
                         "id": call_id,
-                        "name": wire_tool_name(None, name),
+                        "name": wire_tool_name(namespace.as_deref(), name),
                         "input": {"input": input},
                     }),
                 );
+            }
+            // Inter-agent inbox traffic: replay as user text so the model actually reads it.
+            ResponseItem::AgentMessage {
+                author,
+                recipient,
+                content,
+                ..
+            } => {
+                let text: String = content
+                    .iter()
+                    .filter_map(|part| match part {
+                        AgentMessageInputContent::InputText { text } => Some(text.as_str()),
+                        AgentMessageInputContent::EncryptedContent { .. } => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.trim().is_empty() {
+                    messages.push(
+                        "user",
+                        json!({"type": "text", "text": format!("[message from {author} to {recipient}]\n{text}")}),
+                    );
+                }
             }
             ResponseItem::FunctionCallOutput {
                 call_id: Some(call_id),
@@ -376,9 +411,7 @@ fn messages_json(items: &[ResponseItem]) -> Vec<Value> {
                 };
                 messages.push("assistant", json!({"type": "text", "text": format!("[web search: {query}]")}));
             }
-            ResponseItem::Reasoning { .. }
-            | ResponseItem::AdditionalTools { .. }
-            | ResponseItem::AgentMessage { .. }
+            ResponseItem::AdditionalTools { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::ToolSearchCall { .. }
             | ResponseItem::ToolSearchOutput { .. }
