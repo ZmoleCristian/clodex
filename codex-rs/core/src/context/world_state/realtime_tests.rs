@@ -2,7 +2,7 @@ use super::super::test_support::render_section_cases;
 use super::*;
 
 fn state(active: bool, start_instructions: Option<&str>) -> RealtimeState {
-    RealtimeState::new(active, start_instructions, /*end_instructions*/ None)
+    RealtimeState::new(active, /*dual*/ false, start_instructions, /*end_instructions*/ None)
 }
 
 #[test]

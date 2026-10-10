@@ -21,6 +21,29 @@ use codex_protocol::protocol::MultiAgentVersion;
 
 const CLAUDE_INSTRUCTIONS: &str = include_str!("claude_prompt.md");
 
+/// Clodex dual-model mode: "chat+build" slugs. The main thread talks as `chat`, every
+/// spawned agent without an explicit model builds as `build`.
+pub const COMBO_SEPARATOR: char = '+';
+
+/// chat slug, build slug, display name.
+const COMBOS: &[(&str, &str, &str)] = &[
+    ("claude-sonnet-5-5", "claude-opus-5-5", "Sonnet / Opus"),
+    ("claude-opus-5-5", "claude-fable-5-1", "Opus / Fable"),
+    ("claude-sonnet-5-5", "claude-fable-5-1", "Sonnet / Fable"),
+    ("claude-opus-5-5", "claude-opus-5-5", "Opus / Opus"),
+];
+
+/// Splits a combo slug into (chat_model, build_model). Plain slugs return None.
+pub fn combo_models(slug: &str) -> Option<(&str, &str)> {
+    let (chat, build) = slug.split_once(COMBO_SEPARATOR)?;
+    (!chat.is_empty() && !build.is_empty()).then_some((chat, build))
+}
+
+/// The slug the Anthropic API must see: the chat half of a combo, or the slug as is.
+pub fn chat_model(slug: &str) -> &str {
+    combo_models(slug).map_or(slug, |(chat, _)| chat)
+}
+
 /// slug, display name, thinking mode, auto-compact token limit.
 const MODELS: &[(&str, &str, ThinkingMode, i64)] = &[
     ("claude-opus-5-5", "Claude Opus 5.5", Adaptive, 900_000),
@@ -62,6 +85,14 @@ pub fn claude_models_response() -> ModelsResponse {
             .map(|&(slug, display_name, thinking_mode, auto_compact)| {
                 claude_model(slug, display_name, thinking_mode, auto_compact)
             })
+            .chain(COMBOS.iter().map(|&(chat, build, display_name)| {
+                claude_model(
+                    &format!("{chat}{COMBO_SEPARATOR}{build}"),
+                    display_name,
+                    Adaptive,
+                    900_000,
+                )
+            }))
             .collect(),
     }
 }

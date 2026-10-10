@@ -156,6 +156,7 @@ impl Session {
         let realtime = &step_context.realtime;
         world_state.add_section(RealtimeState::new(
             realtime.active,
+            codex_models_manager::claude_catalog::combo_models(&model_info.slug).is_some(),
             realtime
                 .mode_instructions
                 .as_ref()

@@ -25,17 +25,22 @@ pub(crate) struct RealtimeSnapshot {
 impl RealtimeState {
     pub(crate) fn new(
         active: bool,
+        dual: bool,
         start_instructions: Option<&str>,
         end_instructions: Option<&str>,
     ) -> Self {
         // Clodex: whatever the desktop sends as start instructions (or the upstream
-        // default), the voice addendum always follows it.
+        // default), the voice addendum always follows it; a combo slug adds the dual addendum.
         let base = start_instructions.unwrap_or(codex_prompts::START_INSTRUCTIONS);
-        let start_instructions = format!(
+        let mut start_instructions = format!(
             "{}\n\n{}",
             base.trim(),
             codex_prompts::CLODEX_VOICE_ADDENDUM.trim()
         );
+        if dual {
+            start_instructions.push_str("\n\n");
+            start_instructions.push_str(codex_prompts::CLODEX_DUAL_ADDENDUM.trim());
+        }
         Self {
             snapshot: RealtimeSnapshot { active },
             start_instructions: Some(start_instructions),

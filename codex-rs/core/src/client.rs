@@ -2329,7 +2329,8 @@ impl ModelClientSession {
         )?;
         let input = prompt.get_formatted_input_for_request(model_info);
         let request = codex_anthropic::build_request(codex_anthropic::RequestInput {
-            model: &model_info.slug,
+            // Clodex: a combo slug ("chat+build") never reaches the wire.
+            model: codex_models_manager::claude_catalog::chat_model(&model_info.slug),
             thinking_mode: model_info.thinking_mode,
             instructions: &prompt.base_instructions.text,
             input: &input,

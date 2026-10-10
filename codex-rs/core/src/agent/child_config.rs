@@ -201,7 +201,13 @@ async fn apply_requested_spawn_agent_model_overrides(
     requested_reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), String> {
     let turn = step_context.turn.as_ref();
-    let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
+    // Clodex: under a combo slug, children build with the build half unless told otherwise.
+    let combo_build_model =
+        codex_models_manager::claude_catalog::combo_models(&step_context.settings.model_info.slug)
+            .map(|(_, build)| build);
+    let requested_model = requested_model
+        .or(combo_build_model)
+        .or(turn.config.agent_default_subagent_model.as_deref());
     let requested_reasoning_effort = requested_reasoning_effort
         .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone());
     if requested_model.is_none() && requested_reasoning_effort.is_none() {
