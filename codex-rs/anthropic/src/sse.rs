@@ -34,7 +34,13 @@ pub fn spawn_response_stream(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
+    let rate_limits = crate::rate_limits::parse_rate_limits(&response.headers);
     tokio::spawn(async move {
+        if let Some(snapshot) = rate_limits
+            && tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await.is_err()
+        {
+            return;
+        }
         let mut stream = response
             .bytes
             .map(|chunk| chunk.map_err(|e| e.to_string()))
@@ -294,15 +300,28 @@ impl State {
                         false,
                     ),
                 };
-                out.push(Ok(ResponseEvent::OutputItemAdded(ResponseItem::FunctionCall {
-                    id: None,
-                    name: name.clone(),
-                    namespace: namespace.clone(),
-                    arguments: String::new(),
-                    encrypted_function_args: None,
-                    call_id: id.clone(),
-                    internal_chat_message_metadata_passthrough: None,
-                })));
+                let item = if freeform {
+                    ResponseItem::CustomToolCall {
+                        id: None,
+                        status: None,
+                        call_id: id.clone(),
+                        name: name.clone(),
+                        namespace: namespace.clone(),
+                        input: String::new(),
+                        internal_chat_message_metadata_passthrough: None,
+                    }
+                } else {
+                    ResponseItem::FunctionCall {
+                        id: None,
+                        name: name.clone(),
+                        namespace: namespace.clone(),
+                        arguments: String::new(),
+                        encrypted_function_args: None,
+                        call_id: id.clone(),
+                        internal_chat_message_metadata_passthrough: None,
+                    }
+                };
+                out.push(Ok(ResponseEvent::OutputItemAdded(item)));
                 self.block = Block::ToolUse {
                     id,
                     name,

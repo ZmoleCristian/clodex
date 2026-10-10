@@ -2036,6 +2036,7 @@ dependencies = [
 name = "codex-anthropic"
 version = "0.162.0-alpha.10"
 dependencies = [
+ "chrono",
  "codex-api",
  "codex-http-client",
  "codex-protocol",

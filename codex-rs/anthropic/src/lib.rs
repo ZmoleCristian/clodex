@@ -4,6 +4,7 @@
 //! request body; `sse` turns the Messages SSE stream back into `ResponseEvent`s.
 
 mod auth;
+mod rate_limits;
 mod request;
 mod sse;
 
