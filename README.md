@@ -35,7 +35,7 @@ ln -s /usr/lib/chatgpt/resources/codex-code-mode-host target/dev-small/codex-cod
 
 Cold build is about 5 minutes on 8 cores; incremental builds are 30 to 50 seconds.
 
-A model catalog with the Claude models is needed. Put it at `~/.codex/catalog.clodex.json` (see `docs/clodex-catalog.example.json`).
+The Claude model catalog is built in (`codex-rs/models-manager/src/claude_catalog.rs`) and is served whenever the provider is `anthropic`; no catalog file is needed and `model_catalog_json` is ignored on that wire.
 
 Wrapper the desktop will launch instead of its bundled CLI:
 
@@ -46,8 +46,7 @@ real=/path/to/clodex/codex-rs/target/dev-small/codex
 case " $* " in
   *" app-server "*) exec "$real" "$@" \
     -c model_provider=anthropic \
-    -c model=claude-opus-5-5 \
-    -c model_catalog_json=$HOME/.codex/catalog.clodex.json ;;
+    -c model=claude-opus-5-5 ;;
   *) exec "$real" "$@" ;;
 esac
 ```

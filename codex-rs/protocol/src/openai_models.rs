@@ -350,6 +350,16 @@ pub enum ToolMode {
     CodeModeOnly,
 }
 
+/// How a Claude model takes its reasoning budget on the Anthropic Messages API.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingMode {
+    /// `thinking.type: adaptive` plus `output_config.effort`.
+    Adaptive,
+    /// `thinking.type: enabled` with an explicit `budget_tokens`.
+    Budget,
+}
+
 fn deserialize_optional_model_selector<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -509,6 +519,9 @@ pub struct ModelInfo {
     /// Reasoning effort used for multi-agent work when the user selects Ultra.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_reasoning_effort: Option<ReasoningEffort>,
+    /// Thinking request shape on the Anthropic wire; `None` for non-Claude models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<ThinkingMode>,
 }
 
 impl ModelInfo {
@@ -1107,6 +1120,7 @@ mod tests {
             tool_mode: None,
             multi_agent_version: None,
             multi_agent_reasoning_effort: None,
+            thinking_mode: None,
         }
     }
     #[test]

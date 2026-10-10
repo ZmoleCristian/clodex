@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod claude_catalog;
 pub mod collaboration_mode_presets;
 pub(crate) mod config;
 pub mod manager;

@@ -14,6 +14,7 @@ use codex_login::GatewayAuthManager;
 use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -390,7 +391,15 @@ impl ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
         cache: ModelsCacheConfig,
     ) -> SharedModelsManager {
-        if let Some(model_catalog) = config_model_catalog {
+        // The Anthropic wire has its own built-in catalog; `model_catalog_json` is for the
+        // Responses-wire providers.
+        let model_catalog = match self.info.wire_api {
+            WireApi::Anthropic => {
+                Some(codex_models_manager::claude_catalog::claude_models_response())
+            }
+            _ => config_model_catalog,
+        };
+        if let Some(model_catalog) = model_catalog {
             return Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,

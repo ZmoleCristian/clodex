@@ -13,6 +13,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ThinkingMode;
 use codex_tools::FreeformTool;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
@@ -36,6 +37,8 @@ const WEB_SEARCH_MAX_USES: u32 = 5;
 
 pub struct RequestInput<'a> {
     pub model: &'a str,
+    /// From the model catalog; unknown slugs fall back to a fixed budget.
+    pub thinking_mode: Option<ThinkingMode>,
     pub instructions: &'a str,
     pub input: &'a [ResponseItem],
     pub tools: &'a [ToolSpec],
@@ -92,7 +95,7 @@ pub fn build_request(input: RequestInput<'_>) -> MessagesRequest {
             );
         }
     }
-    apply_thinking(&mut body, input.model, input.effort);
+    apply_thinking(&mut body, input.thinking_mode, input.effort);
     if let Some(schema) = input.output_schema {
         body.entry("output_config")
             .or_insert_with(|| json!({}))["format"] = json!({"type": "json_schema", "schema": schema});
@@ -519,38 +522,6 @@ fn pair_results(message: &mut Value, expected: &[String]) {
 // Thinking
 // ---------------------------------------------------------------------------
 
-fn claude_family_version(model: &str) -> Option<(String, u32, u32)> {
-    let idx = model.find("claude-")?;
-    let rest = &model[idx + "claude-".len()..];
-    let family: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
-    let rest = rest[family.len()..].strip_prefix('-')?;
-    let major: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    let major_num = major.parse().ok()?;
-    let rest = &rest[major.len()..];
-    let minor = rest
-        .strip_prefix(['.', '-'])
-        .map(|r| r.chars().take_while(char::is_ascii_digit).collect::<String>())
-        .filter(|d| !d.is_empty() && d.len() <= 2)
-        .and_then(|d| d.parse().ok())
-        .unwrap_or(0);
-    Some((family.to_ascii_lowercase(), major_num, minor))
-}
-
-/// Families that moved to adaptive thinking (\`thinking.type: adaptive\` + \`output_config.effort\`).
-fn uses_adaptive_thinking(model: &str) -> bool {
-    let Some((family, major, minor)) = claude_family_version(model) else {
-        return false;
-    };
-    let min = match family.as_str() {
-        "sonnet" => (5, 0),
-        "opus" => (4, 7),
-        "fable" => (0, 0),
-        "haiku" => (5, 5),
-        _ => return false,
-    };
-    (major, minor) >= min
-}
-
 fn thinking_budget(effort: &str) -> u64 {
     match effort {
         "minimal" => 1024,
@@ -562,7 +533,11 @@ fn thinking_budget(effort: &str) -> u64 {
     }
 }
 
-fn apply_thinking(body: &mut Map<String, Value>, model: &str, effort: Option<ReasoningEffort>) {
+fn apply_thinking(
+    body: &mut Map<String, Value>,
+    thinking_mode: Option<ThinkingMode>,
+    effort: Option<ReasoningEffort>,
+) {
     let effort = effort.unwrap_or(ReasoningEffort::Medium);
     let effort = match effort {
         ReasoningEffort::None => {
@@ -574,7 +549,7 @@ fn apply_thinking(body: &mut Map<String, Value>, model: &str, effort: Option<Rea
         other => other.as_str().to_string(),
     };
     let budget = thinking_budget(&effort);
-    if uses_adaptive_thinking(model) {
+    if thinking_mode == Some(ThinkingMode::Adaptive) {
         let effort = if effort == "minimal" { "low" } else { effort.as_str() };
         body.insert(
             "thinking".into(),

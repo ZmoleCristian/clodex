@@ -2330,6 +2330,7 @@ impl ModelClientSession {
         let input = prompt.get_formatted_input_for_request(model_info);
         let request = codex_anthropic::build_request(codex_anthropic::RequestInput {
             model: &model_info.slug,
+            thinking_mode: model_info.thinking_mode,
             instructions: &prompt.base_instructions.text,
             input: &input,
             tools: &prompt.tools,
