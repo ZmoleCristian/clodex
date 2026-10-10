@@ -1933,8 +1933,8 @@ fn clodex_is_stop_intent(input: &str) -> bool {
         return false;
     }
     [
-        "stop", "oprește", "opreste", "oprește-o", "opreşte", "cancel", "anulează", "anuleaza",
-        "abort",
+        "stop", "stai", "oprește", "opreste", "opreşte", "așteaptă", "asteapta", "aşteaptă",
+        "lasă", "lasa", "cancel", "anulează", "anuleaza", "abort", "wait", "hold on",
     ]
     .iter()
     .any(|needle| lower.contains(needle))
